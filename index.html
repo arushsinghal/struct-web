@@ -1,0 +1,490 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="StructPiece is an unsupervised tokenizer that enforces Unicode grapheme cluster boundaries. EMNLP 2026 paper by Arush Singhal, Jatin Bedi and Jasmeet Singh.">
+<meta property="og:type" content="website">
+<meta property="og:title" content="StructPiece: Tokenization as Structural Inductive Bias">
+<meta property="og:description" content="StructPiece is an unsupervised tokenizer that enforces Unicode grapheme cluster boundaries. EMNLP 2026 paper by Arush Singhal, Jatin Bedi and Jasmeet Singh.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<title>StructPiece: Tokenization as Structural Inductive Bias</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=Noto+Sans+Devanagari:wght@400;500&display=swap">
+<style>
+/* Layout: one left-aligned reading column (max 1000px); prose capped near 65ch, figures and tables run the full column. Tokens drawn as boxed chips are the recurring motif. */
+:root {
+  --bg: #f6f7fb;
+  --surface: #ffffff;
+  --fg: #151930;
+  --muted: #565c78;
+  --rule: #d9dcea;
+  --accent: #3b3fd0;        /* StructPiece */
+  --accent-soft: #e6e7fb;
+  --bpe: #c2570c;           /* SP-BPE */
+  --bpe-soft: #fbeadd;
+  --uni: #00897b;           /* SP-Unigram */
+  --on-accent: #ffffff;
+  --display: "Bricolage Grotesque", "IBM Plex Sans", system-ui, sans-serif;
+  --body: "IBM Plex Sans", "Noto Sans Devanagari", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "IBM Plex Mono", "Noto Sans Devanagari", ui-monospace, "SF Mono", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #10131f; --surface: #181c2c; --fg: #e9ebf7; --muted: #a2a8c4; --rule: #2c3148;
+    --accent: #6f78ee; --accent-soft: #232850; --bpe: #d2702c; --bpe-soft: #3a2616; --uni: #1f9e8f;
+    --on-accent: #0b0d18; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #10131f; --surface: #181c2c; --fg: #e9ebf7; --muted: #a2a8c4; --rule: #2c3148;
+  --accent: #6f78ee; --accent-soft: #232850; --bpe: #d2702c; --bpe-soft: #3a2616; --uni: #1f9e8f;
+  --on-accent: #0b0d18; color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body { margin: 0; }
+img { max-width: 100%; }
+[hidden] { display: none !important; }
+body { background: var(--bg); color: var(--fg); font-family: var(--body); font-size: 17px; line-height: 1.6; }
+.page { max-width: 1000px; margin-inline: auto; padding-inline: 20px; padding-block: 56px 72px; display: flex; flex-direction: column; gap: 72px; }
+section, header, footer { display: flex; flex-direction: column; gap: 20px; min-width: 0; }
+h1, h2, h3 { font-family: var(--display); margin: 0; text-wrap: balance; letter-spacing: -0.01em; }
+h1 { font-size: clamp(2rem, 5.2vw, 3.4rem); line-height: 1.06; font-weight: 700; }
+h1 .sub { display: block; font-size: 0.5em; font-weight: 500; line-height: 1.25; color: var(--muted); margin-top: 14px; letter-spacing: 0; }
+h2 { font-size: 1.7rem; line-height: 1.15; font-weight: 700; }
+h3 { font-size: 1.1rem; font-weight: 700; }
+p { margin: 0; max-width: 66ch; }
+a { color: var(--accent); }
+a:focus-visible, button:focus-visible, summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.label { font-family: var(--mono); font-size: 0.74rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+.num { font-variant-numeric: tabular-nums; }
+
+/* header */
+.venue { display: inline-flex; align-self: flex-start; font-family: var(--mono); font-size: 0.78rem; letter-spacing: 0.08em; text-transform: uppercase; background: var(--accent); color: var(--on-accent); padding: 4px 10px; border-radius: 3px; }
+.authors { display: flex; flex-wrap: wrap; gap: 4px 22px; font-size: 1.1rem; font-weight: 500; }
+.affil { color: var(--muted); font-size: 0.95rem; }
+.links { display: flex; flex-wrap: wrap; gap: 10px; }
+.btn { font: 500 0.92rem var(--body); text-decoration: none; padding: 9px 16px; border-radius: 4px; border: 1.5px solid var(--fg); color: var(--fg); background: transparent; cursor: pointer; }
+.btn.primary { background: var(--fg); color: var(--bg); }
+.btn:hover { border-color: var(--accent); color: var(--accent); }
+.btn.primary:hover { background: var(--accent); color: var(--on-accent); }
+
+/* token chips */
+.tok { display: inline-flex; align-items: center; justify-content: center; font-family: var(--mono); min-width: 1.9em; padding: 0.25em 0.5em; border-radius: 3px; line-height: 1.5; white-space: nowrap; }
+.tok.sp { background: var(--accent-soft); border: 1.5px solid var(--accent); color: var(--fg); }
+.tok.bp { background: var(--bpe-soft); border: 1.5px dashed var(--bpe); color: var(--fg); }
+.toks { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; }
+
+.hero-fig { background: var(--surface); border: 1px solid var(--rule); border-radius: 6px; padding: 24px; display: grid; grid-template-columns: auto 1fr; gap: 22px 32px; align-items: center; }
+.hero-word { grid-row: span 2; display: flex; flex-direction: column; gap: 4px; padding-right: 32px; border-right: 1px solid var(--rule); }
+.hero-word .w { font-family: "Noto Sans Devanagari", var(--body); font-size: 3.4rem; line-height: 1.3; font-weight: 500; }
+.hero-word .g { color: var(--muted); font-size: 0.9rem; }
+.hero-row { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.hero-row .toks { font-size: 1.5rem; }
+.hero-row .note { font-size: 0.9rem; color: var(--muted); }
+.hero-row .note b { color: var(--fg); font-weight: 600; }
+figcaption, .cap { font-size: 0.88rem; color: var(--muted); max-width: 78ch; }
+figure { margin: 0; display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+
+/* headline figures */
+.figures { display: grid; grid-template-columns: repeat(4, 1fr); border-block: 1px solid var(--rule); }
+.figures > div { padding: 20px 20px 20px 0; display: flex; flex-direction: column; gap: 6px; }
+.figures > div + div { padding-left: 20px; border-left: 1px solid var(--rule); }
+.figures .v { font-family: var(--display); font-size: 2.1rem; font-weight: 700; line-height: 1; font-variant-numeric: tabular-nums; }
+.figures .d { font-size: 0.9rem; color: var(--muted); line-height: 1.4; }
+
+/* method */
+.stages { display: grid; grid-template-columns: repeat(3, 1fr); gap: 28px; counter-reset: st; list-style: none; padding: 0; margin: 0; }
+.stages li { display: flex; flex-direction: column; gap: 8px; border-top: 2px solid var(--fg); padding-top: 14px; min-width: 0; }
+.stages li::before { counter-increment: st; content: "Stage " counter(st); font-family: var(--mono); font-size: 0.74rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+.stages p { font-size: 0.95rem; }
+.formula { font-family: var(--mono); font-size: 0.95rem; background: var(--surface); border: 1px solid var(--rule); border-radius: 6px; padding: 16px 18px; overflow-x: auto; white-space: nowrap; }
+.surgery { display: flex; flex-wrap: wrap; align-items: stretch; gap: 10px; font-size: 0.92rem; }
+.surgery > div { flex: 1 1 170px; background: var(--surface); border: 1px solid var(--rule); border-radius: 6px; padding: 14px 16px; display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.surgery b { font-family: var(--display); font-size: 1.05rem; }
+.surgery span { color: var(--muted); }
+
+/* tables */
+.scroll { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 0.92rem; font-variant-numeric: tabular-nums; }
+th, td { text-align: left; padding: 9px 14px 9px 0; border-bottom: 1px solid var(--rule); vertical-align: middle; white-space: nowrap; }
+th { font-family: var(--mono); font-size: 0.72rem; font-weight: 500; letter-spacing: 0.07em; text-transform: uppercase; color: var(--muted); border-bottom: 1.5px solid var(--fg); }
+td.r, th.r { text-align: right; padding-right: 0; padding-left: 14px; }
+tr.ours td { font-weight: 600; }
+tr.ours td:first-child::before, .key i { content: ""; display: inline-block; width: 9px; height: 9px; border-radius: 50%; background: var(--accent); margin-right: 8px; }
+.pm { color: var(--muted); font-weight: 400; }
+.two { display: grid; grid-template-columns: 1fr 1fr; gap: 40px; }
+.two > div { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+
+/* chart */
+.legend { display: flex; flex-wrap: wrap; gap: 6px 20px; font-size: 0.88rem; color: var(--muted); }
+.legend span { display: inline-flex; align-items: center; gap: 7px; }
+.legend svg { width: 12px; height: 12px; }
+.chart { position: relative; min-width: 560px; }
+.chart svg { display: block; width: 100%; height: auto; }
+.chart text { font-family: var(--body); font-size: 12px; fill: var(--muted); }
+.chart .code { font-family: var(--mono); font-size: 11px; fill: var(--fg); }
+.chart .grid { stroke: var(--rule); stroke-width: 1; }
+.chart .traj { stroke: var(--muted); stroke-width: 1; stroke-dasharray: 3 4; fill: none; opacity: 0.6; }
+.chart .m { stroke: var(--surface); stroke-width: 2; }
+.m-sp { fill: var(--accent); } .m-bpe { fill: var(--bpe); } .m-uni { fill: var(--uni); }
+.chartbox { background: var(--surface); border: 1px solid var(--rule); border-radius: 6px; padding: 16px; }
+.tip { position: absolute; pointer-events: none; background: var(--fg); color: var(--bg); font-size: 0.8rem; line-height: 1.4; padding: 7px 10px; border-radius: 4px; white-space: nowrap; transform: translate(-50%, calc(-100% - 12px)); font-variant-numeric: tabular-nums; }
+details summary { cursor: pointer; font-size: 0.92rem; color: var(--accent); width: fit-content; }
+details[open] summary { margin-bottom: 12px; }
+
+/* recovery bars */
+.bars { display: grid; grid-template-columns: max-content 1fr; gap: 14px 18px; align-items: center; font-size: 0.92rem; }
+.bars .pair { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.bar { display: flex; align-items: center; gap: 8px; }
+.bar i { display: block; height: 10px; border-radius: 0 4px 4px 0; }
+.bar.sp i { background: var(--accent); } .bar.bp i { background: var(--bpe); }
+.bar b { font-weight: 500; font-variant-numeric: tabular-nums; font-size: 0.85rem; }
+.bars .lang small { display: block; color: var(--muted); font-size: 0.8rem; }
+
+/* guidance */
+.guide { display: grid; grid-template-columns: 1fr 1fr; gap: 40px; }
+.guide ul { margin: 0; padding-left: 1.1em; display: flex; flex-direction: column; gap: 8px; font-size: 0.95rem; }
+.guide > div { display: flex; flex-direction: column; gap: 12px; }
+.limits { display: grid; grid-template-columns: 1fr 1fr; gap: 20px 40px; font-size: 0.95rem; }
+.limits div { display: flex; flex-direction: column; gap: 4px; }
+.limits b { font-weight: 600; }
+.limits span { color: var(--muted); }
+
+pre { margin: 0; font-family: var(--mono); font-size: 0.82rem; line-height: 1.55; background: var(--surface); border: 1px solid var(--rule); border-radius: 6px; padding: 18px; overflow-x: auto; }
+.bib-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
+footer { border-top: 1px solid var(--rule); padding-top: 24px; font-size: 0.88rem; color: var(--muted); gap: 8px; }
+
+@media (max-width: 760px) {
+  body { font-size: 16px; }
+  .page { gap: 56px; padding-block: 36px 56px; }
+  .hero-fig { grid-template-columns: 1fr; padding: 18px; }
+  .hero-word { grid-row: auto; border-right: 0; padding-right: 0; border-bottom: 1px solid var(--rule); padding-bottom: 14px; }
+  .hero-row .toks { font-size: 1.25rem; }
+  .figures { grid-template-columns: 1fr 1fr; }
+  .figures > div:nth-child(3) { border-left: 0; padding-left: 0; }
+  .figures > div:nth-child(n+3) { border-top: 1px solid var(--rule); }
+  .stages, .two, .guide, .limits { grid-template-columns: 1fr; }
+  .two { gap: 32px; }
+}
+</style>
+</head>
+<body>
+<div class="page">
+
+<header>
+  <span class="venue">EMNLP 2026</span>
+  <h1>Tokenization as Structural Inductive Bias
+    <span class="sub">Grapheme-constrained subwords for multilingual modeling and vocabulary surgery</span>
+  </h1>
+  <div>
+    <div class="authors"><span>Arush Singhal</span><span>Jatin Bedi</span><span>Jasmeet Singh</span></div>
+    <div class="affil">Thapar Institute of Engineering and Technology, Patiala, India</div>
+  </div>
+  <div class="links">
+    <a class="btn primary" href="https://github.com/submissionemnlp26-beep/structpiece-code">Code</a>
+    <a class="btn" href="https://doi.org/10.5281/zenodo.20033927">Corpus slices (Zenodo)</a>
+    <a class="btn" href="#cite">BibTeX</a>
+  </div>
+
+  <figure>
+    <div class="hero-fig">
+      <div class="hero-word">
+        <span class="w" lang="hi">कक्षा</span>
+        <span class="g"><i>kakṣā</i>, “class” · 2 grapheme clusters</span>
+      </div>
+      <div class="hero-row">
+        <span class="label">cl100k_base</span>
+        <div class="toks" lang="hi"><span class="tok bp">क</span><span class="tok bp">क</span><span class="tok bp">···</span><span class="tok bp">···</span><span class="tok bp">◌ा</span></div>
+        <span class="note"><b>5 tokens.</b> Boundaries fall inside the cluster क्षा.</span>
+      </div>
+      <div class="hero-row">
+        <span class="label">StructPiece</span>
+        <div class="toks" lang="hi"><span class="tok sp">क</span><span class="tok sp">क्षा</span></div>
+        <span class="note"><b>2 tokens.</b> Each one is a whole grapheme cluster.</span>
+      </div>
+    </div>
+    <figcaption>The two middle cl100k_base tokens are byte fragments with no printable form, shown as ···. The last is an isolated vowel sign.</figcaption>
+  </figure>
+</header>
+
+<section>
+  <h2>Token boundaries decide what a model predicts</h2>
+  <p>Subword tokenizers are built to compress text. Their boundaries also define the units a language model has to predict, and a compression objective has no reason to respect how a script is written. In Devanagari, Arabic and Tamil, one written unit often spans several codepoints, and BPE is free to cut through the middle of it.</p>
+  <p>StructPiece is an unsupervised tokenizer that never splits a Unicode Extended Grapheme Cluster (EGC) and steers merges toward affixes it finds in the corpus. It uses no morphological analyzer or other external resource. We study it in two settings: small language models trained from scratch under matched budgets, and vocabulary surgery on a pretrained LLaMA-3.2-1B.</p>
+
+  <div class="figures">
+    <div><span class="v">9 · 5</span><span class="d">languages and scripts, four morphological families</span></div>
+    <div><span class="v">3–5×</span><span class="d">lower token perplexity than SentencePiece BPE, at 0.1–0.9 more bits per character</span></div>
+    <div><span class="v">89.4%</span><span class="d">of LLaMA zero-shot accuracy kept on Arabic, Hindi and Turkish; naive BPE surgery keeps 76.4%</span></div>
+    <div><span class="v">−32%</span><span class="d">active parameters after cutting the vocabulary from 128k to 32k</span></div>
+  </div>
+</section>
+
+<section>
+  <h2>How StructPiece builds a vocabulary</h2>
+  <ol class="stages">
+    <li><h3>Find affixes in the corpus</h3><p>A suffix joins the affix set <span class="num">M</span> when it ends enough distinct word types. The threshold grows with the log of the vocabulary, so frequent endings such as Turkish <i>-lar</i>, <i>-ler</i>, <i>-da</i> survive and accidental ones drop out.</p></li>
+    <li><h3>Pretokenize into grapheme clusters</h3><p>Text is first split into EGCs: a base codepoint plus its combining marks, matras, virama or diacritics. Merges start from these atoms, so a token can never begin or end inside one.</p></li>
+    <li><h3>Score merges with structure in mind</h3><p>BPE-style merging continues, with a bonus for merges that produce a discovered affix and a penalty for merges that cross scripts.</p></li>
+  </ol>
+  <div class="formula">S(a, b) = f(a ⊕ b) + λ · 𝟙[a ⊕ b ∈ M] + Ω(a, b) &nbsp;&nbsp;&nbsp; λ = 2.0, &nbsp; Ω = −γ · 𝟙[script(a) ≠ script(b)]</div>
+
+  <h3>Vocabulary surgery on a pretrained model</h3>
+  <p>To swap LLaMA’s vocabulary, each new token is decomposed into the longest matching pieces of the old vocabulary, and its embedding starts as the mean of those pieces. A short round of continued pretraining then aligns the new boundaries with the unchanged Transformer backbone.</p>
+  <div class="surgery">
+    <div><b class="num">128,256</b><span>LLaMA-3.2-1B tokens</span></div>
+    <div><b class="num">98.6%</b><span>of new tokens initialized by mean pooling; 1.4% by Xavier</span></div>
+    <div><b class="num">32,000</b><span>StructPiece tokens, ~1.23B → ~836M parameters</span></div>
+    <div><b class="num">2.6B</b><span>adaptation tokens, 0.03% of LLaMA’s pretraining corpus</span></div>
+  </div>
+</section>
+
+<section>
+  <h2>A compression–representation frontier</h2>
+  <p>With architecture, vocabulary size (4,000) and token budget (2,048,000) held fixed, the same ordering appears in all nine languages. StructPiece has the lowest token perplexity, SentencePiece Unigram compresses best, and SentencePiece BPE sits between them. StructPiece gives up some compression to get more predictable units.</p>
+  <figure>
+    <div class="chartbox">
+      <div class="legend" aria-hidden="true">
+        <span><svg viewBox="0 0 12 12"><circle cx="6" cy="6" r="5" class="m-sp"/></svg>StructPiece</span>
+        <span><svg viewBox="0 0 12 12"><rect x="1.5" y="1.5" width="9" height="9" class="m-bpe"/></svg>SP-BPE</span>
+        <span><svg viewBox="0 0 12 12"><path d="M6 1 11 10.5H1Z" class="m-uni"/></svg>SP-Unigram</span>
+        <span>┄ same language</span>
+      </div>
+      <div class="scroll"><div class="chart" id="frontier"></div></div>
+    </div>
+    <figcaption>Token perplexity (log scale) against bits per character for 27 language–tokenizer pairs, mean of 3 seeds. Lower is better on both axes. Codes: EN English, HI Hindi, TR Turkish, AR Arabic, HU Hungarian, FI Finnish, KA Georgian, ET Estonian, TA Tamil. Token perplexity is not comparable across tokenizers on its own, so read it together with bits per character.</figcaption>
+    <details>
+      <summary>Show all nine languages as a table</summary>
+      <div class="scroll"><table id="fulltable"></table></div>
+    </details>
+  </figure>
+</section>
+
+<section>
+  <h2>The gain is not a token-count artifact</h2>
+  <p>Finer segmentation lowers perplexity mechanically, so we test the two obvious alternative explanations on Turkish, then ablate the components.</p>
+  <div class="two">
+    <div>
+      <h3>Same token budget, half the text</h3>
+      <div class="scroll"><table>
+        <tr><th>Tokenizer</th><th class="r">Words seen</th><th class="r">PPL ↓</th><th class="r">BPC ↓</th></tr>
+        <tr><td>SP-BPE</td><td class="r">1.00×</td><td class="r">1113.7</td><td class="r">3.016</td></tr>
+        <tr><td>SP-Unigram</td><td class="r">0.97×</td><td class="r">619.4</td><td class="r">2.916</td></tr>
+        <tr class="ours"><td>StructPiece</td><td class="r">0.52×</td><td class="r">99.5</td><td class="r">3.856</td></tr>
+      </table></div>
+      <p class="cap">StructPiece sees about half as many words and still reaches far lower perplexity. More exposure does not explain the gap.</p>
+    </div>
+    <div>
+      <h3>Same granularity, no structure</h3>
+      <div class="scroll"><table>
+        <tr><th>Tokenizer</th><th class="r">Vocab</th><th class="r">Tok / word</th><th class="r">PPL ↓</th></tr>
+        <tr><td>SP-BPE, standard</td><td class="r">4k</td><td class="r">2.24</td><td class="r">928.9</td></tr>
+        <tr><td>SP-BPE, matched</td><td class="r">1k</td><td class="r">4.10</td><td class="r">~420</td></tr>
+        <tr class="ours"><td>StructPiece</td><td class="r">4k</td><td class="r">4.28</td><td class="r">99.5</td></tr>
+      </table></div>
+      <p class="cap">Shrinking BPE until it produces as many tokens per word still leaves it about 4× worse.</p>
+    </div>
+  </div>
+
+  <h3>Grapheme constraints do most of the work</h3>
+  <div class="scroll"><table>
+    <tr><th>Variant</th><th class="r">Hindi token PPL ↓</th><th class="r">English token PPL ↓</th></tr>
+    <tr><td>Standard BPE</td><td class="r">844.7 <span class="pm">± 19.7</span></td><td class="r">777.8 <span class="pm">± 18.4</span></td></tr>
+    <tr><td>+ EGC pretokenization</td><td class="r">90.0 <span class="pm">± 1.8</span></td><td class="r">75.8 <span class="pm">± 1.2</span></td></tr>
+    <tr><td>+ Morphology bonus</td><td class="r">86.8 <span class="pm">± 1.3</span></td><td class="r">68.9 <span class="pm">± 1.0</span></td></tr>
+    <tr class="ours"><td>Full StructPiece</td><td class="r">87.8 <span class="pm">± 1.5</span></td><td class="r">68.3 <span class="pm">± 1.1</span></td></tr>
+  </table></div>
+  <p class="cap">EGC pretokenization alone accounts for about 90% of the reduction in both languages. In Hindi it prevents splits inside graphemes. In English the gain comes mostly from handling whitespace separately. Morphology scoring refines the result.</p>
+</section>
+
+<section>
+  <h2>Vocabulary surgery on LLaMA-3.2-1B</h2>
+  <p>If structurally aligned tokens project more coherently into a pretrained embedding space, they should keep more of the model’s ability after the vocabulary is replaced. At the same 2.6B-token checkpoint, StructPiece keeps 13.0 points more zero-shot accuracy than a 32k BPE vocabulary on morphologically rich languages.</p>
+  <div class="two">
+    <figure>
+      <h3>Zero-shot accuracy recovered</h3>
+      <div class="legend"><span><svg viewBox="0 0 12 12"><rect y="3" width="12" height="6" class="m-sp"/></svg>StructPiece 32k</span><span><svg viewBox="0 0 12 12"><rect y="3" width="12" height="6" class="m-bpe"/></svg>SP-BPE 32k</span></div>
+      <div class="bars" id="bars"></div>
+      <figcaption>Share of base LLaMA accuracy, representative matched run. X-CSQA for Turkish, Hindi and Arabic; ARC-Easy and HellaSwag averaged for English. Three-seed aggregates: 89.3 ± 0.3% against 76.2 ± 0.9% on the three morphologically rich languages.</figcaption>
+    </figure>
+    <div>
+      <h3>Coherence tracks recovery</h3>
+      <div class="scroll"><table>
+        <tr><th>Initialization</th><th class="r">Cosine</th><th class="r">Loss, step 10</th><th class="r">Recovery</th></tr>
+        <tr><td>Random normal</td><td class="r">~0.00</td><td class="r">11.453</td><td class="r">~38.0%</td></tr>
+        <tr><td>SP-BPE, mean-pool</td><td class="r">0.714 <span class="pm">± 0.082</span></td><td class="r">1.054</td><td class="r">76.4%</td></tr>
+        <tr><td>EGC-only BPE, mean-pool</td><td class="r">0.838 <span class="pm">± 0.048</span></td><td class="r">0.915</td><td class="r">87.4%</td></tr>
+        <tr class="ours"><td>StructPiece, mean-pool</td><td class="r">0.852 <span class="pm">± 0.042</span></td><td class="r">0.884</td><td class="r">89.4%</td></tr>
+      </table></div>
+      <p class="cap">Cosine similarity between each new embedding and the source embeddings it was pooled from. Across the four variants, higher coherence goes with lower starting loss and higher recovery on the morphologically rich languages.</p>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2>Downstream: helps where boundaries matter</h2>
+  <div class="two">
+    <div>
+      <div class="scroll"><table>
+        <tr><th>NER F1, mBERT</th><th class="r">Standard</th><th class="r">+ SP-BPE</th><th class="r">+ StructPiece</th></tr>
+        <tr><td>Hindi</td><td class="r">70.5</td><td class="r">69.2</td><td class="r"><b>72.8</b></td></tr>
+        <tr><td>Arabic</td><td class="r">61.5</td><td class="r">60.8</td><td class="r"><b>63.4</b></td></tr>
+        <tr><td>Turkish</td><td class="r">73.2</td><td class="r">71.5</td><td class="r"><b>75.1</b></td></tr>
+        <tr><td>English</td><td class="r">81.5</td><td class="r"><b>82.1</b></td><td class="r">79.8</td></tr>
+      </table></div>
+      <p class="cap">Entity-level F1 (%), mean of 3 seeds, 2,000 training examples. These are low-supervision probes that show direction, not competitive scores.</p>
+    </div>
+    <div>
+      <p>StructPiece improves NER on Hindi, Arabic and Turkish and loses on English, where BPE units already line up with entity spans. POS tagging improves on the three morphologically rich languages and is flat on English.</p>
+      <p>XNLI stays near chance for every tokenizer. The effect is specific to boundary-sensitive tasks and is not a general reasoning gain.</p>
+    </div>
+  </div>
+
+  <h3>What the segmentations look like</h3>
+  <div class="scroll"><table>
+    <tr><th>Word</th><th>SP-BPE</th><th>StructPiece</th></tr>
+    <tr><td lang="hi">लड़कों <span class="pm">boys</span></td><td><div class="toks" lang="hi"><span class="tok bp">▁लड़</span><span class="tok bp">कों</span></div></td><td><div class="toks" lang="hi"><span class="tok sp">लड़कों</span></div></td></tr>
+    <tr><td lang="hi">अध्यापकों <span class="pm">teachers</span></td><td><div class="toks" lang="hi"><span class="tok bp">▁अध</span><span class="tok bp">◌्याप</span><span class="tok bp">कों</span></div></td><td><div class="toks" lang="hi"><span class="tok sp">अध्यापकों</span></div></td></tr>
+    <tr><td lang="tr">evlerinizden <span class="pm">from your houses</span></td><td><div class="toks"><span class="tok bp">▁ev</span><span class="tok bp">ler</span><span class="tok bp">iniz</span><span class="tok bp">den</span></div></td><td><div class="toks"><span class="tok sp">evler</span><span class="tok sp">iniz</span><span class="tok sp">den</span></div></td></tr>
+    <tr><td lang="tr">gidiyorum <span class="pm">I am going</span></td><td><div class="toks"><span class="tok bp">▁gid</span><span class="tok bp">iyorum</span></div></td><td><div class="toks"><span class="tok sp">gi</span><span class="tok sp">d</span><span class="tok sp">iyor</span><span class="tok sp">um</span></div></td></tr>
+  </table></div>
+  <p class="cap">StructPiece often emits more tokens, as in the last row. On average it produces 1.3–1.9× as many tokens per word as SP-BPE.</p>
+</section>
+
+<section>
+  <h2>When to use it, and what it costs</h2>
+  <div class="guide">
+    <div>
+      <h3>Prefer StructPiece</h3>
+      <ul>
+        <li>Morphologically rich or non-Latin-script languages</li>
+        <li>Sequence labeling such as NER and POS, where span boundaries matter</li>
+        <li>Vocabulary surgery or domain adaptation from a large pretrained LLM</li>
+        <li>Training from scratch with a small vocabulary (8k or less)</li>
+      </ul>
+    </div>
+    <div>
+      <h3>Prefer compression-first BPE</h3>
+      <ul>
+        <li>Analytic, Latin-script languages, for example English NER</li>
+        <li>Long-context generation, where bits per character matter</li>
+        <li>Inference-constrained settings that cannot absorb longer sequences</li>
+        <li>Large vocabularies (above 32k), where grapheme fragmentation fades</li>
+      </ul>
+    </div>
+  </div>
+  <div class="limits">
+    <div><b>Longer sequences.</b><span>In the worst case, Turkish, the smaller vocabulary offsets the extra tokens only up to about 377 input characters. Past that, inference FLOPs exceed the original LLaMA.</span></div>
+    <div><b>Small-scale evidence.</b><span>The controlled experiments use a 4,000-piece vocabulary and a two-layer model. The ordering holds for a 50M-parameter model on 100M tokens, with a narrower gap.</span></div>
+    <div><b>Suffixes only.</b><span>Affix discovery does not model Arabic root-pattern morphology or logographic scripts such as Mandarin.</span></div>
+    <div><b>Matched budget, not asymptote.</b><span>Surgery results are reported at one 2.6B-token checkpoint on a 1B-parameter model. A full MorphBPE comparison is not included.</span></div>
+  </div>
+</section>
+
+<section id="cite">
+  <div class="bib-head"><h2>Cite</h2><button class="btn" id="copy" type="button">Copy BibTeX</button></div>
+  <pre id="bib">@inproceedings{singhal2026structpiece,
+  title     = {Tokenization as Structural Inductive Bias: Grapheme-Constrained Subwords for Multilingual Modeling and Vocabulary Surgery},
+  author    = {Singhal, Arush and Bedi, Jatin and Singh, Jasmeet},
+  booktitle = {Proceedings of the 2026 Conference on Empirical Methods in Natural Language Processing},
+  year      = {2026}
+}</pre>
+</section>
+
+<footer>
+  <span>Training data: IndicCorpV2 for Hindi and Tamil, OSCAR for the other seven languages. The processed slices are archived at doi:10.5281/zenodo.20033927.</span>
+  <span>We thank Thapar Institute of Engineering and Technology for supporting this work.</span>
+</footer>
+
+</div>
+
+<script>
+(function () {
+  // [language, code, [PPL, sd, BPC, sd] for StructPiece, SP-BPE, SP-Unigram]
+  var D = [
+    ["Arabic","AR",[169.8,4.2,3.789,0.050],[1145.0,25.3,3.528,0.018],[766.9,16.9,3.384,0.018]],
+    ["English","EN",[68.3,1.1,3.051,0.015],[777.8,18.4,2.661,0.012],[352.3,8.3,2.589,0.012]],
+    ["Estonian","ET",[235.8,6.5,3.592,0.022],[1209.2,30.1,3.451,0.019],[789.3,19.6,3.310,0.019]],
+    ["Finnish","FI",[202.6,5.1,3.182,0.018],[916.7,21.8,3.151,0.017],[562.7,13.4,2.960,0.017]],
+    ["Georgian","KA",[216.7,5.9,3.319,0.020],[1106.2,27.6,3.134,0.018],[695.0,17.3,2.930,0.018]],
+    ["Hindi","HI",[87.8,1.5,3.230,0.050],[844.7,19.7,2.909,0.014],[577.7,13.5,2.879,0.014]],
+    ["Hungarian","HU",[188.8,4.8,3.477,0.019],[1089.8,24.9,3.398,0.017],[799.7,18.3,3.272,0.017]],
+    ["Tamil","TA",[289.2,8.1,3.164,0.021],[1533.4,35.2,2.951,0.018],[1110.4,25.5,2.794,0.018]],
+    ["Turkish","TR",[101.9,2.3,3.876,0.023],[928.9,22.5,3.003,0.016],[619.4,15.0,2.916,0.016]]
+  ];
+  var NAMES = ["StructPiece", "SP-BPE", "SP-Unigram"], CLS = ["m-sp", "m-bpe", "m-uni"];
+  var W = 720, H = 430, L = 56, R = 22, T = 14, B = 46;
+  var x0 = 2.5, x1 = 4.0, y0 = Math.log10(50), y1 = Math.log10(2000);
+  function X(v) { return L + (v - x0) / (x1 - x0) * (W - L - R); }
+  function Y(v) { return T + (y1 - Math.log10(v)) / (y1 - y0) * (H - T - B); }
+  function f(n) { return n.toFixed(1); }
+
+  var s = '<svg viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="Scatter plot of token perplexity against bits per character for three tokenizers across nine languages">';
+  [50, 100, 200, 500, 1000, 2000].forEach(function (t) {
+    s += '<line class="grid" x1="' + L + '" x2="' + (W - R) + '" y1="' + f(Y(t)) + '" y2="' + f(Y(t)) + '"/>';
+    s += '<text x="' + (L - 8) + '" y="' + f(Y(t) + 4) + '" text-anchor="end">' + t + '</text>';
+  });
+  [2.5, 3.0, 3.5, 4.0].forEach(function (t) {
+    s += '<text x="' + f(X(t)) + '" y="' + (H - B + 18) + '" text-anchor="middle">' + t.toFixed(1) + '</text>';
+  });
+  s += '<text x="' + ((L + W - R) / 2) + '" y="' + (H - 6) + '" text-anchor="middle">Bits per character (BPC)</text>';
+  s += '<text transform="translate(14 ' + ((T + H - B) / 2) + ') rotate(-90)" text-anchor="middle">Token perplexity</text>';
+
+  var pts = [];
+  D.forEach(function (d) {
+    var o = [d[3], d[4], d[2]]; // BPE -> Unigram -> StructPiece
+    s += '<polyline class="traj" points="' + o.map(function (p) { return f(X(p[2])) + ',' + f(Y(p[0])); }).join(' ') + '"/>';
+  });
+  D.forEach(function (d) {
+    for (var k = 0; k < 3; k++) {
+      var p = d[k + 2], cx = X(p[2]), cy = Y(p[0]);
+      pts.push({ x: cx, y: cy, t: '<b>' + d[0] + ' · ' + NAMES[k] + '</b><br>PPL ' + p[0].toFixed(1) + ' ± ' + p[1] + ' &nbsp; BPC ' + p[2].toFixed(3) });
+      if (k === 0) s += '<circle class="m m-sp" cx="' + f(cx) + '" cy="' + f(cy) + '" r="6"/><text class="code" x="' + f(cx) + '" y="' + f(cy + 19) + '" text-anchor="middle">' + d[1] + '</text>';
+      else if (k === 1) s += '<rect class="m m-bpe" x="' + f(cx - 5) + '" y="' + f(cy - 5) + '" width="10" height="10"/>';
+      else s += '<path class="m m-uni" d="M' + f(cx) + ' ' + f(cy - 6.5) + 'L' + f(cx + 6.5) + ' ' + f(cy + 5) + 'H' + f(cx - 6.5) + 'Z"/>';
+    }
+  });
+  s += '</svg><div class="tip" hidden></div>';
+
+  var el = document.getElementById('frontier');
+  el.innerHTML = s;
+  var svg = el.querySelector('svg'), tip = el.querySelector('.tip');
+  svg.addEventListener('pointermove', function (e) {
+    var r = svg.getBoundingClientRect(), k = W / r.width;
+    var mx = (e.clientX - r.left) * k, my = (e.clientY - r.top) * k, best = null, bd = 26 * 26;
+    pts.forEach(function (p) { var q = (p.x - mx) * (p.x - mx) + (p.y - my) * (p.y - my); if (q < bd) { bd = q; best = p; } });
+    if (!best) { tip.hidden = true; return; }
+    tip.innerHTML = best.t; tip.hidden = false;
+    tip.style.left = Math.min(Math.max(best.x / k, 110), r.width - 110) + 'px';
+    tip.style.top = Math.max(best.y / k, 56) + 'px';
+  });
+  svg.addEventListener('pointerleave', function () { tip.hidden = true; });
+
+  var t = '<tr><th>Language</th><th>Tokenizer</th><th class="r">Token PPL ↓</th><th class="r">BPC ↓</th></tr>';
+  D.forEach(function (d) {
+    for (var k = 0; k < 3; k++) {
+      var p = d[k + 2];
+      t += '<tr' + (k === 0 ? ' class="ours"' : '') + '><td>' + (k === 0 ? d[0] : '') + '</td><td>' + NAMES[k] + '</td><td class="r">' + p[0].toFixed(1) + ' <span class="pm">± ' + p[1].toFixed(1) + '</span></td><td class="r">' + p[2].toFixed(3) + ' <span class="pm">± ' + p[3].toFixed(3) + '</span></td></tr>';
+    }
+  });
+  document.getElementById('fulltable').innerHTML = t;
+
+  var REC = [["Turkish", "agglutinative", 91.0, 78.3], ["Hindi", "fusional", 88.9, 76.5], ["Arabic", "root-pattern", 87.8, 74.4], ["English", "analytic control", 96.3, 84.0]];
+  document.getElementById('bars').innerHTML = REC.map(function (r) {
+    return '<div class="lang">' + r[0] + '<small>' + r[1] + '</small></div><div class="pair">' +
+      '<div class="bar sp"><i style="width:' + (r[2] * 0.82) + '%"></i><b>' + r[2].toFixed(1) + '%</b></div>' +
+      '<div class="bar bp"><i style="width:' + (r[3] * 0.82) + '%"></i><b>' + r[3].toFixed(1) + '%</b></div></div>';
+  }).join('');
+
+  var btn = document.getElementById('copy'), bib = document.getElementById('bib');
+  btn.addEventListener('click', function () {
+    function sel() { var g = document.createRange(); g.selectNodeContents(bib); var w = getSelection(); w.removeAllRanges(); w.addRange(g); btn.textContent = 'Selected, press copy'; }
+    try { navigator.clipboard.writeText(bib.textContent).then(function () { btn.textContent = 'Copied'; }, sel); } catch (e) { sel(); }
+  });
+})();
+</script>
+</body>
+</html>
